@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Power Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .status-online { background: #28a745; }
+        .status-offline { background: #dc3545; }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        
+        .card h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .power-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #e74c3c;
+            margin: 10px 0;
+        }
+        
+        .voltage-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .current-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #f39c12;
+        }
+        
+        .unit {
+            font-size: 0.5em;
+            color: #7f8c8d;
+            font-weight: normal;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f1f1;
+        }
+        
+        .metric:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: #7f8c8d;
+            font-weight: 500;
+        }
+        
+        .metric-value {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #1e7e34;
+            transform: translateY(-2px);
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+        
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        
+        .btn-warning:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+        
+        .recording-status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .recording-active {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .recording-inactive {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #c3e6cb;
+        }
+        
+        @media (max-width: 768px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-bar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ ESP32 Power Monitor</h1>
+            <p>Real-time power monitoring with Los Angeles timezone</p>
+        </div>
+        
+        <div class="content">
+            <!-- Status Bar -->
+            <div class="status-bar">
+                <div class="status-item">
+                    <span class="status-indicator" id="wifi-status"></span>
+                    <span id="wifi-text">WiFi: Checking...</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-indicator" id="data-status"></span>
+                    <span id="data-text">Data: Checking...</span>
+                </div>
+                <div class="status-item">
+                    <span id="current-time">Time: Loading...</span>
+                </div>
+                <div class="status-item">
+                    <span id="uptime">Uptime: Loading...</span>
+                </div>
+            </div>
+            
+            <!-- Main Power Data -->
+            <div class="main-grid">
+                <div class="card">
+                    <h3>Power Consumption</h3>
+                    <div class="power-value" id="power-value">--<span class="unit">W</span></div>
+                    <div class="metric">
+                        <span class="metric-label">Current:</span>
+                        <span class="metric-value" id="current-value">-- A</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Voltage:</span>
+                        <span class="metric-value" id="voltage-value">-- V</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Power Factor:</span>
+                        <span class="metric-value" id="pf-value">--</span>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh</button>
+                        <button class="btn btn-success" onclick="startRecording()">⏺️ Start Recording</button>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>Energy & Frequency</h3>
+                    <div class="metric">
+                        <span class="metric-label">Energy:</span>
+                        <span class="metric-value" id="energy-value">-- kWh</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Frequency:</span>
+                        <span class="metric-value" id="frequency-value">-- Hz</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">PZEM Address:</span>
+                        <span class="metric-value" id="address-value">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Last Update:</span>
+                        <span class="metric-value" id="last-update">--</span>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-warning" onclick="testPZEM()">🔧 Test PZEM</button>
+                        <button class="btn btn-danger" onclick="stopRecording()">⏹️ Stop Recording</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Recording Status -->
+            <div class="card">
+                <h3>Data Recording</h3>
+                <div id="recording-status" class="recording-inactive">
+                    Recording: Inactive
+                </div>
+                <div id="recording-info" style="display: none;">
+                    <div class="metric">
+                        <span class="metric-label">Interval:</span>
+                        <span class="metric-value" id="recording-interval">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Records Collected:</span>
+                        <span class="metric-value" id="records-count">--</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Buffer Status:</span>
+                        <span class="metric-value" id="buffer-status">--</span>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="getRecordedData()">📊 View Data</button>
+                    <button class="btn btn-warning" onclick="getAnalysis()">📈 Analysis</button>
+                    <button class="btn btn-danger" onclick="clearData()">🗑️ Clear Data</button>
+                </div>
+            </div>
+            
+            <!-- Messages -->
+            <div id="message-container"></div>
+            
+            <!-- Loading Indicator -->
+            <div id="loading" class="loading">
+                <p>Loading data...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let autoRefresh = true;
+        let refreshInterval;
+        
+        // Initialize the dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStatus();
+            loadData();
+            startAutoRefresh();
+        });
+        
+        function showMessage(message, type = 'success') {
+            const container = document.getElementById('message-container');
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = message;
+            container.appendChild(div);
+            
+            setTimeout(() => {
+                div.remove();
+            }, 5000);
+        }
+        
+        function showLoading(show = true) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        
+        async function loadStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                
+                // Update WiFi status
+                const wifiStatus = document.getElementById('wifi-status');
+                const wifiText = document.getElementById('wifi-text');
+                if (data.wifi_connected) {
+                    wifiStatus.className = 'status-indicator status-online';
+                    wifiText.textContent = `WiFi: ${data.ip_address}`;
+                } else {
+                    wifiStatus.className = 'status-indicator status-offline';
+                    wifiText.textContent = 'WiFi: Disconnected';
+                }
+                
+                // Update uptime
+                const uptime = Math.floor(data.uptime / 1000);
+                const hours = Math.floor(uptime / 3600);
+                const minutes = Math.floor((uptime % 3600) / 60);
+                const seconds = uptime % 60;
+                document.getElementById('uptime').textContent = 
+                    `Uptime: ${hours}h ${minutes}m ${seconds}s`;
+                
+                // Update current time
+                document.getElementById('current-time').textContent = 
+                    `Time: ${data.current_time}`;
+                
+            } catch (error) {
+                console.error('Error loading status:', error);
+                document.getElementById('wifi-status').className = 'status-indicator status-offline';
+                document.getElementById('wifi-text').textContent = 'WiFi: Error';
+            }
+        }
+        
+        async function loadData() {
+            try {
+                showLoading(true);
+                const response = await fetch('/data');
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                // Update power values
+                document.getElementById('power-value').textContent = 
+                    data.power.toFixed(2) + 'W';
+                document.getElementById('current-value').textContent = 
+                    data.current.toFixed(3) + ' A';
+                document.getElementById('voltage-value').textContent = 
+                    data.voltage.toFixed(1) + ' V';
+                document.getElementById('pf-value').textContent = 
+                    data.power_factor.toFixed(2);
+                document.getElementById('energy-value').textContent = 
+                    data.energy.toFixed(3) + ' kWh';
+                document.getElementById('frequency-value').textContent = 
+                    data.frequency.toFixed(1) + ' Hz';
+                document.getElementById('address-value').textContent = 
+                    '0x' + data.address.toString(16).toUpperCase();
+                
+                // Update last update time
+                if (data.iso_time) {
+                    const date = new Date(data.iso_time);
+                    document.getElementById('last-update').textContent = 
+                        date.toLocaleTimeString();
+                }
+                
+                // Update data status
+                const dataStatus = document.getElementById('data-status');
+                const dataText = document.getElementById('data-text');
+                if (data.valid) {
+                    dataStatus.className = 'status-indicator status-online';
+                    dataText.textContent = 'Data: Valid';
+                } else {
+                    dataStatus.className = 'status-indicator status-offline';
+                    dataText.textContent = 'Data: Invalid';
+                }
+                
+            } catch (error) {
+                console.error('Error loading data:', error);
+                showMessage('Error loading power data: ' + error.message, 'error');
+                document.getElementById('data-status').className = 'status-indicator status-offline';
+                document.getElementById('data-text').textContent = 'Data: Error';
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function refreshData() {
+            await loadData();
+            showMessage('Data refreshed successfully');
+        }
+        
+        async function startRecording() {
+            try {
+                const response = await fetch('/record/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        interval: 5000
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                showMessage('Recording started successfully');
+                updateRecordingStatus();
+                
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                showMessage('Error starting recording: ' + error.message, 'error');
+            }
+        }
+        
+        async function stopRecording() {
+            try {
+                const response = await fetch('/record/stop', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                showMessage(`Recording stopped. Collected ${data.records_collected} records.`);
+                updateRecordingStatus();
+                
+            } catch (error) {
+                console.error('Error stopping recording:', error);
+                showMessage('Error stopping recording: ' + error.message, 'error');
+            }
+        }
+        
+        async function updateRecordingStatus() {
+            try {
+                const response = await fetch('/record/status');
+                const data = await response.json();
+                
+                const statusDiv = document.getElementById('recording-status');
+                const infoDiv = document.getElementById('recording-info');
+                
+                if (data.is_recording) {
+                    statusDiv.className = 'recording-status recording-active';
+                    statusDiv.textContent = 'Recording: Active';
+                    infoDiv.style.display = 'block';
+                    
+                    document.getElementById('recording-interval').textContent = 
+                        (data.interval / 1000) + ' seconds';
+                    document.getElementById('records-count').textContent = 
+                        data.records_collected;
+                    document.getElementById('buffer-status').textContent = 
+                        data.buffer_full ? 'Full' : 'Available';
+                } else {
+                    statusDiv.className = 'recording-status recording-inactive';
+                    statusDiv.textContent = 'Recording: Inactive';
+                    infoDiv.style.display = 'none';
+                }
+                
+            } catch (error) {
+                console.error('Error updating recording status:', error);
+            }
+        }
+        
+        async function getRecordedData() {
+            try {
+                const response = await fetch('/record/data');
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                if (data.records && data.records.length > 0) {
+                    const csv = convertToCSV(data.records);
+                    downloadCSV(csv, 'power_data.csv');
+                    showMessage(`Downloaded ${data.records.length} records`);
+                } else {
+                    showMessage('No recorded data available', 'error');
+                }
+                
+            } catch (error) {
+                console.error('Error getting recorded data:', error);
+                showMessage('Error getting recorded data: ' + error.message, 'error');
+            }
+        }
+        
+        async function getAnalysis() {
+            try {
+                const response = await fetch('/analysis');
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                const analysis = data.analysis;
+                const message = `Analysis: Min ${analysis.min_power}W, Max ${analysis.max_power}W, Avg ${analysis.avg_power}W, Energy ${analysis.total_energy}kWh, Duration ${(analysis.duration_seconds/60).toFixed(1)}min`;
+                showMessage(message);
+                
+            } catch (error) {
+                console.error('Error getting analysis:', error);
+                showMessage('Error getting analysis: ' + error.message, 'error');
+            }
+        }
+        
+        async function clearData() {
+            if (!confirm('Are you sure you want to clear all recorded data?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/record/clear', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                showMessage('All recorded data cleared');
+                updateRecordingStatus();
+                
+            } catch (error) {
+                console.error('Error clearing data:', error);
+                showMessage('Error clearing data: ' + error.message, 'error');
+            }
+        }
+        
+        async function testPZEM() {
+            try {
+                const response = await fetch('/pzem_test');
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                const results = data.test_results;
+                const message = `PZEM Test: Address 0x${results.address}, Voltage ${results.voltage}V, Current ${results.current}A, Power ${results.power}W`;
+                showMessage(message);
+                
+            } catch (error) {
+                console.error('Error testing PZEM:', error);
+                showMessage('Error testing PZEM: ' + error.message, 'error');
+            }
+        }
+        
+        function convertToCSV(records) {
+            const headers = ['Timestamp', 'ISO Time', 'Voltage (V)', 'Current (A)', 'Power (W)', 'Energy (kWh)', 'Frequency (Hz)', 'Power Factor', 'Address'];
+            const csvRows = [headers.join(',')];
+            
+            records.forEach(record => {
+                const row = [
+                    record.timestamp,
+                    record.iso_time,
+                    record.voltage,
+                    record.current,
+                    record.power,
+                    record.energy,
+                    record.frequency,
+                    record.power_factor,
+                    record.address
+                ];
+                csvRows.push(row.join(','));
+            });
+            
+            return csvRows.join('\n');
+        }
+        
+        function downloadCSV(csv, filename) {
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+        
+        function startAutoRefresh() {
+            refreshInterval = setInterval(() => {
+                if (autoRefresh) {
+                    loadStatus();
+                    loadData();
+                    updateRecordingStatus();
+                }
+            }, 5000); // Refresh every 5 seconds
+        }
+        
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        }
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', stopAutoRefresh);
+    </script>
+</body>
+</html> 
