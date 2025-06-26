@@ -1,0 +1,13 @@
+# Energy Monitoring
+from(bucket: "ESP32_Power_Monitoring")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "power_consumption" and r._field == "energy")
+  |> last()
+
+# Power Monitoring
+from(bucket: "ESP32_Power_Monitoring")
+  |> range(start: v.timeRangeStart, stop:v.timeRangeStop)
+  |> filter(fn: (r) =>
+    r._measurement == "power_consumption" and
+    r._field == "power"
+  )
