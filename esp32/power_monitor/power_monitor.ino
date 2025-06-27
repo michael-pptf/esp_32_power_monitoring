@@ -1,11 +1,41 @@
+// Increase MQTT buffer size for large discovery messages
+#define MQTT_MAX_PACKET_SIZE 1024
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <PZEM004Tv30.h>
 #include <time.h>
+#include <PubSubClient.h>
 
 // Wi-Fi credentials
-const char* ssid = "MM_House";
-const char* password = "mikemelody";
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+
+// MQTT Configuration
+const char* mqtt_server = "YOUR_MQTT_SERVER";  // Change to your Home Assistant IP
+const int mqtt_port = 1883;
+const char* mqtt_username = "YOUR_MQTT_USERNAME";  // Leave empty if no authentication
+const char* mqtt_password = "YOUR_MQTT_PASSWORD";  // Leave empty if no authentication
+const char* mqtt_client_id = "esp32_power_monitor";
+const char* mqtt_device_name = "ESP32 Power Monitor";
+const char* mqtt_device_id = "esp32_power_monitor_001";
+
+// MQTT Topics
+const char* mqtt_base_topic = "esp32/power";
+const char* mqtt_status_topic = "esp32/status";
+const char* mqtt_command_topic = "esp32/command";
+const char* mqtt_discovery_prefix = "homeassistant";
+
+// MQTT Client
+WiFiClient espClient;
+PubSubClient mqtt_client(espClient);
+
+// MQTT State
+bool mqtt_connected = false;
+unsigned long last_mqtt_publish = 0;
+const unsigned long mqtt_publish_interval = 5000; // Publish every 5 seconds
+unsigned long last_discovery_publish = 0;
+const unsigned long discovery_republish_interval = 300000; // Re-publish discovery every 5 minutes
 
 // Time configuration, change if needed
 const char* ntpServer = "pool.ntp.org";
@@ -61,6 +91,173 @@ struct RecordedData {
 RecordedData recordedData[150]; // Store up to 150 records (increased from 100)
 int dataIndex = 0;
 bool bufferFull = false;
+
+// Function declarations
+void startRecording(int interval = 5000);
+void stopRecording();
+void readPowerData();
+void storeRecordedData();
+String getISOTime();
+String getFormattedTime();
+
+// MQTT Functions
+void mqtt_callback(char* topic, byte* payload, unsigned int length) {
+  Serial.printf("Debug: MQTT message received on topic: %s\n", topic);
+  
+  // Convert payload to string
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  Serial.printf("Debug: MQTT message: %s\n", message.c_str());
+  
+  // Handle commands
+  if (String(topic) == String(mqtt_command_topic) + "/record/start") {
+    if (message == "true" || message == "1") {
+      Serial.println("Debug: MQTT command - Start recording");
+      // Parse interval from message if provided
+      int interval = 5000; // default
+      if (message.indexOf("interval:") != -1) {
+        String intervalStr = message.substring(message.indexOf("interval:") + 9);
+        interval = intervalStr.toInt();
+      }
+      startRecording(interval);
+    }
+  }
+  else if (String(topic) == String(mqtt_command_topic) + "/record/stop") {
+    if (message == "true" || message == "1") {
+      Serial.println("Debug: MQTT command - Stop recording");
+      stopRecording();
+    }
+  }
+  else if (String(topic) == String(mqtt_command_topic) + "/interval") {
+    int newInterval = message.toInt();
+    if (newInterval >= 1000 && newInterval <= 60000) {
+      Serial.printf("Debug: MQTT command - Set interval to %d ms\n", newInterval);
+      recording.interval = newInterval;
+    }
+  }
+}
+
+void mqtt_connect() {
+  Serial.println("Debug: Attempting MQTT connection...");
+  
+  if (mqtt_client.connect(mqtt_client_id, mqtt_username, mqtt_password)) {
+    Serial.println("Debug: MQTT connected successfully!");
+    mqtt_connected = true;
+    
+    // Subscribe to command topics
+    mqtt_client.subscribe((String(mqtt_command_topic) + "/record/start").c_str());
+    mqtt_client.subscribe((String(mqtt_command_topic) + "/record/stop").c_str());
+    mqtt_client.subscribe((String(mqtt_command_topic) + "/interval").c_str());
+    
+    Serial.println("Debug: MQTT subscriptions created");
+    
+    // Publish device discovery
+    publish_discovery();
+    last_discovery_publish = millis();
+    
+  } else {
+    Serial.printf("Debug: MQTT connection failed, rc=%d\n", mqtt_client.state());
+    mqtt_connected = false;
+  }
+}
+
+void publish_discovery() {
+  Serial.println("Debug: Publishing Home Assistant discovery messages...");
+  
+  // Ensure MQTT client is connected and loop is called
+  if (!mqtt_client.connected()) {
+    Serial.println("Debug: MQTT not connected during discovery publish!");
+    return;
+  }
+  
+  mqtt_client.loop(); // Process any pending MQTT messages
+  
+  // Test simple publish first
+  Serial.println("Debug: Testing simple MQTT publish...");
+  bool test_result = mqtt_client.publish("esp32/test", "Hello MQTT", false);
+  Serial.println("Debug: Test publish result: " + String(test_result));
+  mqtt_client.loop();
+  delay(500);
+  
+  // Simple device config
+  String device_config = "{\"identifiers\":[\"" + String(mqtt_device_id) + "\"],\"name\":\"" + String(mqtt_device_name) + "\"}";
+  
+  // Publish just one sensor first to test
+  String power_topic = String(mqtt_discovery_prefix) + "/sensor/" + mqtt_device_id + "_power/config";
+  String power_config = "{\"device\":" + device_config + ",\"name\":\"Power\",\"state_topic\":\"" + String(mqtt_base_topic) + "/power\",\"unit_of_measurement\":\"W\"}";
+  
+  Serial.println("Debug: Publishing power sensor config...");
+  bool power_result = mqtt_client.publish(power_topic.c_str(), power_config.c_str(), true);
+  Serial.println("Debug: Power publish result: " + String(power_result));
+  mqtt_client.loop();
+  delay(1000);
+  
+  Serial.println("Debug: Discovery test completed");
+}
+
+void publish_mqtt_data() {
+  if (!mqtt_connected || !latestData.valid) {
+    return;
+  }
+  
+  // Publish power data
+  mqtt_client.publish((String(mqtt_base_topic) + "/voltage").c_str(), String(latestData.voltage, 2).c_str());
+  mqtt_client.publish((String(mqtt_base_topic) + "/current").c_str(), String(latestData.current, 3).c_str());
+  mqtt_client.publish((String(mqtt_base_topic) + "/power").c_str(), String(latestData.power, 2).c_str());
+  mqtt_client.publish((String(mqtt_base_topic) + "/energy").c_str(), String(latestData.energy, 3).c_str());
+  mqtt_client.publish((String(mqtt_base_topic) + "/frequency").c_str(), String(latestData.frequency, 1).c_str());
+  mqtt_client.publish((String(mqtt_base_topic) + "/pf").c_str(), String(latestData.pf, 2).c_str());
+  
+  // Publish status
+  mqtt_client.publish((String(mqtt_status_topic) + "/recording").c_str(), recording.isRecording ? "ON" : "OFF");
+  mqtt_client.publish((String(mqtt_status_topic) + "/wifi").c_str(), WiFi.status() == WL_CONNECTED ? "ON" : "OFF");
+  mqtt_client.publish((String(mqtt_status_topic) + "/memory").c_str(), String(ESP.getFreeHeap()).c_str());
+  mqtt_client.publish((String(mqtt_status_topic) + "/uptime").c_str(), String(millis()).c_str());
+  
+  Serial.println("Debug: MQTT data published");
+}
+
+// Standalone recording functions for MQTT
+void startRecording(int interval) {
+  Serial.printf("Debug: startRecording called with interval %d ms\n", interval);
+  
+  if (recording.isRecording) {
+    Serial.println("Debug: Recording already in progress");
+    return;
+  }
+  
+  // Set interval if provided
+  if (interval >= 1000 && interval <= 60000) {
+    recording.interval = interval;
+  }
+  
+  // Start recording
+  recording.isRecording = true;
+  recording.startTime = millis();
+  recording.lastReadTime = 0;
+  recording.recordCount = 0;
+  dataIndex = 0;
+  bufferFull = false;
+  
+  Serial.printf("Debug: Recording started with interval %lu ms\n", recording.interval);
+}
+
+void stopRecording() {
+  Serial.println("Debug: stopRecording called");
+  
+  if (!recording.isRecording) {
+    Serial.println("Debug: No recording in progress");
+    return;
+  }
+  
+  recording.isRecording = false;
+  unsigned long duration = millis() - recording.startTime;
+  
+  Serial.printf("Debug: Recording stopped. Duration: %lu ms, Records: %d\n", duration, recording.recordCount);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -123,6 +320,21 @@ void setup() {
   // Test PZEM communication
   Serial.println("Debug: Testing PZEM communication...");
   testPZEMCommunication();
+
+  // Initialize MQTT
+  Serial.println("Debug: Initializing MQTT...");
+  mqtt_client.setServer(mqtt_server, mqtt_port);
+  mqtt_client.setCallback(mqtt_callback);
+  
+  // Attempt MQTT connection
+  mqtt_connect();
+  
+  // Force discovery publish after a short delay
+  delay(2000);
+  if (mqtt_connected) {
+    Serial.println("Debug: Forcing discovery publish...");
+    publish_discovery();
+  }
 
   // Setup web server routes
   Serial.println("Debug: Setting up web server routes...");
@@ -419,50 +631,32 @@ void setupWebServer() {
   server.on("/pzem_test", HTTP_GET, []() {
     Serial.println("Debug: /pzem_test endpoint accessed");
     
-    String json = "{";
-    json += "\"test_results\":{";
+    // Read current power data for testing
+    readPowerData();
     
-    // Test address reading
-    uint8_t addr = pzem.readAddress();
-    json += "\"address\":\"" + String(addr, HEX) + "\",";
+    String response = "{";
+    response += "\"test_results\":{";
+    response += "\"address\":\"" + String(latestData.address, HEX) + "\",";
+    response += "\"voltage\":" + String(latestData.voltage, 2) + ",";
+    response += "\"current\":" + String(latestData.current, 3) + ",";
+    response += "\"power\":" + String(latestData.power, 2) + ",";
+    response += "\"valid\":" + String(latestData.valid ? "true" : "false");
+    response += "}";
+    response += "}";
     
-    // Test voltage
-    float voltage = pzem.voltage();
-    json += "\"voltage\":" + String(voltage, 2) + ",";
-    json += "\"voltage_valid\":" + String(!isnan(voltage) ? "true" : "false") + ",";
+    server.send(200, "application/json", response);
+  });
+
+  // Manual MQTT discovery trigger endpoint
+  server.on("/mqtt_discovery", HTTP_POST, []() {
+    Serial.println("Debug: /mqtt_discovery endpoint accessed - triggering discovery");
     
-    // Test current
-    float current = pzem.current();
-    json += "\"current\":" + String(current, 3) + ",";
-    json += "\"current_valid\":" + String(!isnan(current) ? "true" : "false") + ",";
-    
-    // Test power
-    float power = pzem.power();
-    json += "\"power\":" + String(power, 2) + ",";
-    json += "\"power_factor\":" + String(pzem.pf(), 2) + ",";
-    json += "\"power_valid\":" + String(!isnan(power) ? "true" : "false") + ",";
-    
-    // Test energy
-    float energy = pzem.energy();
-    json += "\"energy\":" + String(energy, 3) + ",";
-    json += "\"energy_valid\":" + String(!isnan(energy) ? "true" : "false") + ",";
-    
-    // Test frequency
-    float frequency = pzem.frequency();
-    json += "\"frequency\":" + String(frequency, 1) + ",";
-    json += "\"frequency_valid\":" + String(!isnan(frequency) ? "true" : "false") + ",";
-    
-    // Test power factor
-    float pf = pzem.pf();
-    json += "\"power_factor\":" + String(pf, 2) + ",";
-    json += "\"power_factor_valid\":" + String(!isnan(pf) ? "true" : "false");
-    
-    json += "}";
-    json += "}";
-    
-    Serial.printf("Debug: Sending PZEM test response: %s\n", json.c_str());
-    server.send(200, "application/json", json);
-    Serial.println("Debug: /pzem_test response sent");
+    if (mqtt_connected) {
+      publish_discovery();
+      server.send(200, "application/json", "{\"status\":\"discovery_triggered\"}");
+    } else {
+      server.send(503, "application/json", "{\"error\":\"MQTT not connected\"}");
+    }
   });
 
   // Start recording endpoint
@@ -761,6 +955,31 @@ void readPowerData() {
 void loop() {
   // Handle web server clients
   server.handleClient();
+
+  // Handle MQTT
+  if (!mqtt_client.connected()) {
+    mqtt_connected = false;
+    if (millis() - last_mqtt_publish > 30000) { // Try to reconnect every 30 seconds
+      Serial.println("Debug: MQTT disconnected, attempting to reconnect...");
+      mqtt_connect();
+      last_mqtt_publish = millis();
+    }
+  } else {
+    mqtt_client.loop();
+    
+    // Publish MQTT data periodically
+    if (millis() - last_mqtt_publish >= mqtt_publish_interval) {
+      publish_mqtt_data();
+      last_mqtt_publish = millis();
+    }
+    
+    // Re-publish discovery messages periodically
+    if (millis() - last_discovery_publish >= discovery_republish_interval) {
+      Serial.println("Debug: Re-publishing discovery messages...");
+      publish_discovery();
+      last_discovery_publish = millis();
+    }
+  }
 
   // Recording logic - check if we need to read data
   if (recording.isRecording) {

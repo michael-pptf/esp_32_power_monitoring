@@ -72,6 +72,91 @@ RX                →    GPIO 17 (TX2)
 - **Error Handling** - User-friendly error messages and status feedback
 - **Confirmation Dialogs** - Safe data clearing with confirmation prompts
 
+## 🔌 MQTT Integration
+
+### Home Assistant Auto-Discovery:
+The ESP32 automatically publishes device configuration to Home Assistant using MQTT Discovery, creating the following sensors:
+
+#### Power Sensors:
+- **Power Consumption** (`sensor.esp32_power_monitor_001_power`) - Real-time power in Watts
+- **Voltage** (`sensor.esp32_power_monitor_001_voltage`) - AC voltage in Volts
+- **Current** (`sensor.esp32_power_monitor_001_current`) - Current draw in Amperes
+- **Energy Consumption** (`sensor.esp32_power_monitor_001_energy`) - Total energy in kWh
+- **Frequency** (`sensor.esp32_power_monitor_001_frequency`) - AC frequency in Hz
+- **Power Factor** (`sensor.esp32_power_monitor_001_pf`) - Power factor (0-1)
+
+#### Status Sensors:
+- **Recording Status** (`binary_sensor.esp32_power_monitor_001_recording`) - ON/OFF recording state
+- **WiFi Status** (`sensor.esp32_power_monitor_001_wifi`) - WiFi connection status
+- **Memory Usage** (`sensor.esp32_power_monitor_001_memory`) - Free heap memory
+- **Uptime** (`sensor.esp32_power_monitor_001_uptime`) - Device uptime in milliseconds
+
+### MQTT Topics:
+
+#### Data Topics (Published by ESP32):
+```
+esp32/power/voltage      - Voltage reading (V)
+esp32/power/current      - Current reading (A)
+esp32/power/power        - Power consumption (W)
+esp32/power/energy       - Energy consumption (kWh)
+esp32/power/frequency    - AC frequency (Hz)
+esp32/power/pf           - Power factor
+esp32/status/recording   - Recording status (ON/OFF)
+esp32/status/wifi        - WiFi status (ON/OFF)
+esp32/status/memory      - Free memory (bytes)
+esp32/status/uptime      - Uptime (ms)
+```
+
+#### Command Topics (Subscribed by ESP32):
+```
+esp32/command/record/start  - Start recording (send "true" or "1")
+esp32/command/record/stop   - Stop recording (send "true" or "1")
+esp32/command/interval      - Set recording interval (send milliseconds)
+```
+
+### Configuration:
+Update the MQTT settings in the firmware:
+```cpp
+const char* mqtt_server = "192.168.1.100";  // Your Home Assistant IP
+const int mqtt_port = 1883;
+const char* mqtt_username = "";  // Leave empty if no authentication
+const char* mqtt_password = "";  // Leave empty if no authentication
+```
+
+### Home Assistant Setup:
+1. **Install MQTT Integration** - Add MQTT integration in Home Assistant
+2. **Configure MQTT Broker** - Point to your MQTT broker (usually Home Assistant's built-in broker)
+3. **Auto-Discovery** - Devices will appear automatically in the MQTT integration
+4. **Create Dashboards** - Use the discovered sensors in your Home Assistant dashboards
+
+### Example Home Assistant Automations:
+```yaml
+# Alert when power consumption exceeds 1000W
+automation:
+  - alias: "High Power Alert"
+    trigger:
+      platform: numeric_state
+      entity_id: sensor.esp32_power_monitor_001_power
+      above: 1000
+    action:
+      - service: notify.mobile_app
+        data:
+          message: "High power consumption detected: {{ states('sensor.esp32_power_monitor_001_power') }}W"
+
+# Start recording when power exceeds 500W
+automation:
+  - alias: "Start Power Recording"
+    trigger:
+      platform: numeric_state
+      entity_id: sensor.esp32_power_monitor_001_power
+      above: 500
+    action:
+      - service: mqtt.publish
+        data:
+          topic: esp32/command/record/start
+          payload: "true"
+```
+
 ## 🚀 Quick Start
 
 ### 1. Upload the Code
