@@ -314,7 +314,7 @@
                     </div>
                     <div class="button-group">
                         <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh</button>
-                        <button class="btn btn-success" onclick="startRecording()">⏺️ Start Recording</button>
+                        <button class="btn btn-success" id="recording-button" onclick="toggleRecording()">⏺️ Start Recording</button>
                     </div>
                 </div>
                 
@@ -338,7 +338,6 @@
                     </div>
                     <div class="button-group">
                         <button class="btn btn-warning" onclick="testPZEM()">🔧 Test PZEM</button>
-                        <button class="btn btn-danger" onclick="stopRecording()">⏹️ Stop Recording</button>
                     </div>
                 </div>
             </div>
@@ -362,6 +361,18 @@
                         <span class="metric-label">Buffer Status:</span>
                         <span class="metric-value" id="buffer-status">--</span>
                     </div>
+                </div>
+                <div class="metric" style="margin-bottom: 15px;">
+                    <span class="metric-label">Poll Interval:</span>
+                    <select id="poll-interval" style="padding: 5px; border: 1px solid #ddd; border-radius: 4px; margin-left: 10px;">
+                        <option value="1000">1 second</option>
+                        <option value="2000">2 seconds</option>
+                        <option value="5000" selected>5 seconds</option>
+                        <option value="10000">10 seconds</option>
+                        <option value="15000">15 seconds</option>
+                        <option value="30000">30 seconds</option>
+                        <option value="60000">60 seconds</option>
+                    </select>
                 </div>
                 <div class="button-group">
                     <button class="btn btn-primary" onclick="getRecordedData()">📊 View Data</button>
@@ -388,6 +399,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
             loadData();
+            updateRecordingStatus(); // This will set the correct button state
             startAutoRefresh();
         });
         
@@ -501,51 +513,52 @@
             showMessage('Data refreshed successfully');
         }
         
-        async function startRecording() {
+        async function toggleRecording() {
             try {
-                const response = await fetch('/record/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        interval: 5000
-                    })
-                });
+                // Get current recording status first
+                const statusResponse = await fetch('/record/status');
+                const statusData = await statusResponse.json();
                 
-                const data = await response.json();
-                
-                if (data.error) {
-                    throw new Error(data.error);
+                if (statusData.is_recording) {
+                    // Currently recording, so stop it
+                    const response = await fetch('/record/stop', {
+                        method: 'POST'
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    showMessage(`Recording stopped. Collected ${data.records_collected} records.`);
+                } else {
+                    // Not recording, so start it
+                    const interval = parseInt(document.getElementById('poll-interval').value);
+                    const response = await fetch('/record/start', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            interval: interval
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    showMessage('Recording started successfully');
                 }
                 
-                showMessage('Recording started successfully');
                 updateRecordingStatus();
                 
             } catch (error) {
-                console.error('Error starting recording:', error);
-                showMessage('Error starting recording: ' + error.message, 'error');
-            }
-        }
-        
-        async function stopRecording() {
-            try {
-                const response = await fetch('/record/stop', {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
-                showMessage(`Recording stopped. Collected ${data.records_collected} records.`);
-                updateRecordingStatus();
-                
-            } catch (error) {
-                console.error('Error stopping recording:', error);
-                showMessage('Error stopping recording: ' + error.message, 'error');
+                console.error('Error toggling recording:', error);
+                showMessage('Error toggling recording: ' + error.message, 'error');
             }
         }
         
@@ -556,6 +569,7 @@
                 
                 const statusDiv = document.getElementById('recording-status');
                 const infoDiv = document.getElementById('recording-info');
+                const recordingButton = document.getElementById('recording-button');
                 
                 if (data.is_recording) {
                     statusDiv.className = 'recording-status recording-active';
@@ -568,10 +582,20 @@
                         data.records_collected;
                     document.getElementById('buffer-status').textContent = 
                         data.buffer_full ? 'Full' : 'Available';
+                    
+                    // Show stop recording button
+                    recordingButton.textContent = '⏹️ Stop Recording';
+                    recordingButton.className = 'btn btn-danger';
+                    recordingButton.style.display = 'inline-block';
                 } else {
                     statusDiv.className = 'recording-status recording-inactive';
                     statusDiv.textContent = 'Recording: Inactive';
                     infoDiv.style.display = 'none';
+                    
+                    // Show start recording button
+                    recordingButton.textContent = '⏺️ Start Recording';
+                    recordingButton.className = 'btn btn-success';
+                    recordingButton.style.display = 'inline-block';
                 }
                 
             } catch (error) {

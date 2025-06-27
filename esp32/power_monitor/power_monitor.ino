@@ -4,8 +4,8 @@
 #include <time.h>
 
 // Wi-Fi credentials
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = "MM_House";
+const char* password = "mikemelody";
 
 // Time configuration, change if needed
 const char* ntpServer = "pool.ntp.org";
@@ -39,7 +39,7 @@ struct RecordingState {
   unsigned long startTime = 0;
   unsigned long lastReadTime = 0;
   unsigned long interval = 5000; // Default 5 seconds
-  int maxRecords = 100; // Maximum records to store
+  int maxRecords = 150; // Maximum records to store (increased from 100)
   int recordCount = 0;
 } recording;
 
@@ -58,7 +58,7 @@ struct RecordedData {
 };
 
 // Circular buffer for storing recorded data
-RecordedData recordedData[100]; // Store up to 100 records
+RecordedData recordedData[150]; // Store up to 150 records (increased from 100)
 int dataIndex = 0;
 bool bufferFull = false;
 
@@ -274,7 +274,7 @@ void setupWebServer() {
     html += "<div class='metric'><span class='metric-label'>Power Factor:</span><span class='metric-value' id='pf-value'>--</span></div>";
     html += "<div class='button-group'>";
     html += "<button class='btn btn-primary' onclick='refreshData()'>🔄 Refresh</button>";
-    html += "<button class='btn btn-success' onclick='startRecording()'>⏺️ Start Recording</button>";
+    html += "<button class='btn btn-success' id='recording-button' onclick='toggleRecording()'>⏺️ Start Recording</button>";
     html += "</div></div>";
     html += "<div class='card'><h3>Energy & Frequency</h3>";
     html += "<div class='metric'><span class='metric-label'>Energy:</span><span class='metric-value' id='energy-value'>-- kWh</span></div>";
@@ -283,7 +283,6 @@ void setupWebServer() {
     html += "<div class='metric'><span class='metric-label'>Last Update:</span><span class='metric-value' id='last-update'>--</span></div>";
     html += "<div class='button-group'>";
     html += "<button class='btn btn-warning' onclick='testPZEM()'>🔧 Test PZEM</button>";
-    html += "<button class='btn btn-danger' onclick='stopRecording()'>⏹️ Stop Recording</button>";
     html += "</div></div></div>";
     html += "<div class='card'><h3>Data Recording</h3>";
     html += "<div id='recording-status' class='recording-inactive'>Recording: Inactive</div>";
@@ -292,6 +291,7 @@ void setupWebServer() {
     html += "<div class='metric'><span class='metric-label'>Records Collected:</span><span class='metric-value' id='records-count'>--</span></div>";
     html += "<div class='metric'><span class='metric-label'>Buffer Status:</span><span class='metric-value' id='buffer-status'>--</span></div>";
     html += "</div>";
+    html += "<div class='metric' style='margin-bottom:15px;'><span class='metric-label'>Poll Interval:</span><select id='poll-interval' style='padding:5px;border:1px solid #ddd;border-radius:4px;margin-left:10px;'><option value='1000'>1 second</option><option value='2000'>2 seconds</option><option value='5000' selected>5 seconds</option><option value='10000'>10 seconds</option><option value='15000'>15 seconds</option><option value='30000'>30 seconds</option><option value='60000'>60 seconds</option></select></div>";
     html += "<div class='button-group'>";
     html += "<button class='btn btn-primary' onclick='getRecordedData()'>📊 View Data</button>";
     html += "<button class='btn btn-warning' onclick='getAnalysis()'>📈 Analysis</button>";
@@ -301,14 +301,13 @@ void setupWebServer() {
     html += "</div></div>";
     html += "<script>";
     html += "let refreshInterval;";
-    html += "document.addEventListener('DOMContentLoaded',function(){loadStatus();loadData();startAutoRefresh();});";
+    html += "document.addEventListener('DOMContentLoaded',function(){loadStatus();loadData();updateRecordingStatus();startAutoRefresh();});";
     html += "function showMessage(message,type='success'){const container=document.getElementById('message-container');const div=document.createElement('div');div.className=type;div.textContent=message;container.appendChild(div);setTimeout(()=>div.remove(),5000);}";
     html += "async function loadStatus(){try{const response=await fetch('/status');const data=await response.json();const wifiStatus=document.getElementById('wifi-status');const wifiText=document.getElementById('wifi-text');if(data.wifi_connected){wifiStatus.className='status-indicator status-online';wifiText.textContent='WiFi: '+data.ip_address;}else{wifiStatus.className='status-indicator status-offline';wifiText.textContent='WiFi: Disconnected';}const uptime=Math.floor(data.uptime/1000);const hours=Math.floor(uptime/3600);const minutes=Math.floor((uptime%3600)/60);const seconds=uptime%60;document.getElementById('uptime').textContent='Uptime: '+hours+'h '+minutes+'m '+seconds+'s';document.getElementById('current-time').textContent='Time: '+data.current_time;}catch(error){console.error('Error loading status:',error);document.getElementById('wifi-status').className='status-indicator status-offline';document.getElementById('wifi-text').textContent='WiFi: Error';}}";
     html += "async function loadData(){try{const response=await fetch('/data');const data=await response.json();if(data.error)throw new Error(data.error);document.getElementById('power-value').textContent=data.power.toFixed(2)+'W';document.getElementById('current-value').textContent=data.current.toFixed(3)+' A';document.getElementById('voltage-value').textContent=data.voltage.toFixed(1)+' V';document.getElementById('pf-value').textContent=data.power_factor.toFixed(2);document.getElementById('energy-value').textContent=data.energy.toFixed(3)+' kWh';document.getElementById('frequency-value').textContent=data.frequency.toFixed(1)+' Hz';document.getElementById('address-value').textContent='0x'+data.address.toString(16).toUpperCase();if(data.iso_time){const date=new Date(data.iso_time);document.getElementById('last-update').textContent=date.toLocaleTimeString();}const dataStatus=document.getElementById('data-status');const dataText=document.getElementById('data-text');if(data.valid){dataStatus.className='status-indicator status-online';dataText.textContent='Data: Valid';}else{dataStatus.className='status-indicator status-offline';dataText.textContent='Data: Invalid';}}catch(error){console.error('Error loading data:',error);showMessage('Error loading power data: '+error.message,'error');document.getElementById('data-status').className='status-indicator status-offline';document.getElementById('data-text').textContent='Data: Error';}}";
     html += "async function refreshData(){await loadData();showMessage('Data refreshed successfully');}";
-    html += "async function startRecording(){try{const response=await fetch('/record/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:5000})});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('Recording started successfully');updateRecordingStatus();}catch(error){console.error('Error starting recording:',error);showMessage('Error starting recording: '+error.message,'error');}}";
-    html += "async function stopRecording(){try{const response=await fetch('/record/stop',{method:'POST'});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('Recording stopped. Collected '+data.records_collected+' records.');updateRecordingStatus();}catch(error){console.error('Error stopping recording:',error);showMessage('Error stopping recording: '+error.message,'error');}}";
-    html += "async function updateRecordingStatus(){try{const response=await fetch('/record/status');const data=await response.json();const statusDiv=document.getElementById('recording-status');const infoDiv=document.getElementById('recording-info');if(data.is_recording){statusDiv.className='recording-status recording-active';statusDiv.textContent='Recording: Active';infoDiv.style.display='block';document.getElementById('recording-interval').textContent=(data.interval/1000)+' seconds';document.getElementById('records-count').textContent=data.records_collected;document.getElementById('buffer-status').textContent=data.buffer_full?'Full':'Available';}else{statusDiv.className='recording-status recording-inactive';statusDiv.textContent='Recording: Inactive';infoDiv.style.display='none';}}catch(error){console.error('Error updating recording status:',error);}}";
+    html += "async function toggleRecording(){try{const statusResponse=await fetch('/record/status');const statusData=await statusResponse.json();if(statusData.is_recording){const response=await fetch('/record/stop',{method:'POST'});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('Recording stopped. Collected '+data.records_collected+' records.');}else{const interval=parseInt(document.getElementById('poll-interval').value);const response=await fetch('/record/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:interval})});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('Recording started successfully');}updateRecordingStatus();}catch(error){console.error('Error toggling recording:',error);showMessage('Error toggling recording: '+error.message,'error');}}";
+    html += "async function updateRecordingStatus(){try{const response=await fetch('/record/status');const data=await response.json();const statusDiv=document.getElementById('recording-status');const infoDiv=document.getElementById('recording-info');const recordingButton=document.getElementById('recording-button');if(data.is_recording){statusDiv.className='recording-status recording-active';statusDiv.textContent='Recording: Active';infoDiv.style.display='block';document.getElementById('recording-interval').textContent=(data.interval/1000)+' seconds';document.getElementById('records-count').textContent=data.records_collected;document.getElementById('buffer-status').textContent=data.buffer_full?'Full':'Available';recordingButton.textContent='⏹️ Stop Recording';recordingButton.className='btn btn-danger';}else{statusDiv.className='recording-status recording-inactive';statusDiv.textContent='Recording: Inactive';infoDiv.style.display='none';recordingButton.textContent='⏺️ Start Recording';recordingButton.className='btn btn-success';}}catch(error){console.error('Error updating recording status:',error);}}";
     html += "async function getRecordedData(){try{const response=await fetch('/record/data');const data=await response.json();if(data.error)throw new Error(data.error);if(data.records&&data.records.length>0){const csv=convertToCSV(data.records);downloadCSV(csv,'power_data.csv');showMessage('Downloaded '+data.records.length+' records');}else{showMessage('No recorded data available','error');}}catch(error){console.error('Error getting recorded data:',error);showMessage('Error getting recorded data: '+error.message,'error');}}";
     html += "async function getAnalysis(){try{const response=await fetch('/analysis');const data=await response.json();if(data.error)throw new Error(data.error);const analysis=data.analysis;const message='Analysis: Min '+analysis.min_power+'W, Max '+analysis.max_power+'W, Avg '+analysis.avg_power+'W, Energy '+analysis.total_energy+'kWh, Duration '+(analysis.duration_seconds/60).toFixed(1)+'min';showMessage(message);}catch(error){console.error('Error getting analysis:',error);showMessage('Error getting analysis: '+error.message,'error');}}";
     html += "async function clearData(){if(!confirm('Are you sure you want to clear all recorded data?'))return;try{const response=await fetch('/record/clear',{method:'POST'});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('All recorded data cleared');updateRecordingStatus();}catch(error){console.error('Error clearing data:',error);showMessage('Error clearing data: '+error.message,'error');}}";
@@ -572,10 +571,10 @@ void setupWebServer() {
     String response = "{\"records\":[";
     
     int count = 0;
-    int maxRecords = bufferFull ? 100 : recording.recordCount;
+    int maxRecords = bufferFull ? 150 : recording.recordCount;
     
     for (int i = 0; i < maxRecords; i++) {
-      int idx = (dataIndex - maxRecords + i + 100) % 100;
+      int idx = (dataIndex - maxRecords + i + 150) % 150;
       RecordedData& data = recordedData[idx];
       
       if (data.valid) {
@@ -622,10 +621,10 @@ void setupWebServer() {
     unsigned long startTime = 0;
     unsigned long endTime = 0;
     
-    int maxRecords = bufferFull ? 100 : recording.recordCount;
+    int maxRecords = bufferFull ? 150 : recording.recordCount;
     
     for (int i = 0; i < maxRecords; i++) {
-      int idx = (dataIndex - maxRecords + i + 100) % 100;
+      int idx = (dataIndex - maxRecords + i + 150) % 150;
       RecordedData& data = recordedData[idx];
       
       if (data.valid) {
@@ -672,7 +671,7 @@ void setupWebServer() {
     Serial.println("Debug: /record/clear endpoint accessed");
     
     // Clear all recorded data
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 150; i++) {
       recordedData[i].valid = false;
     }
     
@@ -797,7 +796,7 @@ void storeRecordedData() {
   recordedData[dataIndex].valid = true;
   
   // Update circular buffer index
-  dataIndex = (dataIndex + 1) % 100;
+  dataIndex = (dataIndex + 1) % 150;
   if (dataIndex == 0) {
     bufferFull = true;
     Serial.println("Debug: Recording buffer full - overwriting oldest data");

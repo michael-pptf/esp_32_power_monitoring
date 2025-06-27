@@ -33,8 +33,9 @@ RX                →    GPIO 17 (TX2)
 - ✅ **HTTP API endpoints** - RESTful interface for data access
 - ✅ **Recording mode** - Start/stop data collection with timestamps
 - ✅ **PC review analysis** - Min/max/avg power calculations
-- ✅ **Memory efficient** - Circular buffer for 100 data points
+- ✅ **Memory efficient** - Circular buffer for 150 data points (increased from 100)
 - ✅ **Configurable intervals** - 1-60 second sampling rates
+- ✅ **Smart UI** - Conditional recording buttons and poll interval selection
 
 ### API Endpoints:
 
@@ -51,6 +52,23 @@ RX                →    GPIO 17 (TX2)
 | `/record/data` | GET | Get all recorded data points |
 | `/record/clear` | POST | Clear all recorded data |
 | `/analysis` | GET | Power analysis (min/max/avg/total energy) |
+
+## 🎨 Frontend Features
+
+### Web Dashboard:
+- **Real-time Monitoring** - Live power consumption display with auto-refresh
+- **Conditional Recording Controls** - Single button that toggles between Start/Stop recording
+- **Configurable Poll Intervals** - Dropdown to select 1, 2, 5, 10, 15, 30, or 60 second intervals
+- **Recording Status** - Visual indicators for active/inactive recording state
+- **Data Export** - CSV download functionality for recorded data
+- **Power Analysis** - Min/max/average power calculations with duration tracking
+- **Responsive Design** - Mobile-friendly interface with modern UI
+
+### Interactive Elements:
+- **Status Indicators** - WiFi connection and data validity status
+- **Real-time Updates** - Auto-refresh every 5 seconds
+- **Error Handling** - User-friendly error messages and status feedback
+- **Confirmation Dialogs** - Safe data clearing with confirmation prompts
 
 ## 🚀 Quick Start
 
@@ -190,14 +208,14 @@ curl http://ESP_IP/status
 ## 📈 Performance
 
 ### Sampling Rates:
-- **1 second**: High detail, 100 records = 1.7 minutes
-- **2 seconds**: Good balance, 100 records = 3.3 minutes
-- **5 seconds**: Standard, 100 records = 8.3 minutes
-- **10 seconds**: Long-term, 100 records = 16.7 minutes
+- **1 second**: High detail, 150 records = 2.5 minutes
+- **2 seconds**: Good balance, 150 records = 5 minutes
+- **5 seconds**: Standard, 150 records = 12.5 minutes
+- **10 seconds**: Long-term, 150 records = 25 minutes
 
 ### Memory Usage:
 - **Base system**: ~200KB
-- **Data buffer**: ~4KB
+- **Data buffer**: ~6KB (increased from ~4KB)
 - **Web server**: ~50KB
 - **Available heap**: ~250KB typical
 
