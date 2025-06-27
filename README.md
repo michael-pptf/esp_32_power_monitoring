@@ -2,6 +2,8 @@
 
 A power consumption monitoring system using ESP32 and PZEM-004T v3.0 that serves data via HTTP API.
 
+See my blog post here for more details: [Building a Power Monitoring System with ESP32 and PZEM-004T: A Pull-Based Approach](https://www.michaelstinkerings.org/building-a-power-monitoring-system-with-esp32-and-pzem-004t-a-pull-based-approach/)
+
 ## 🎯 Overview
 
 The **Pull Model** provides a web server interface where external systems can request power data on-demand. This approach is ideal for:
