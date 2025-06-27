@@ -6,25 +6,7 @@
 #include <PZEM004Tv30.h>
 #include <time.h>
 #include <PubSubClient.h>
-
-// Wi-Fi credentials
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
-
-// MQTT Configuration
-const char* mqtt_server = "YOUR_MQTT_SERVER";  // Change to your Home Assistant IP
-const int mqtt_port = 1883;
-const char* mqtt_username = "YOUR_MQTT_USERNAME";  // Leave empty if no authentication
-const char* mqtt_password = "YOUR_MQTT_PASSWORD";  // Leave empty if no authentication
-const char* mqtt_client_id = "esp32_power_monitor";
-const char* mqtt_device_name = "ESP32 Power Monitor";
-const char* mqtt_device_id = "esp32_power_monitor_001";
-
-// MQTT Topics
-const char* mqtt_base_topic = "esp32/power";
-const char* mqtt_status_topic = "esp32/status";
-const char* mqtt_command_topic = "esp32/command";
-const char* mqtt_discovery_prefix = "homeassistant";
+#include "config.h"  // Include configuration file
 
 // MQTT Client
 WiFiClient espClient;
@@ -37,14 +19,8 @@ const unsigned long mqtt_publish_interval = 5000; // Publish every 5 seconds
 unsigned long last_discovery_publish = 0;
 const unsigned long discovery_republish_interval = 300000; // Re-publish discovery every 5 minutes
 
-// Time configuration, change if needed
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = -28800; // GMT-8 for Los Angeles (PST)
-const int daylightOffset_sec = 3600; // 1 hour for PDT
-const char* timezone = "America/Los_Angeles";
-
-// PZEM with specific address 0x07 - using Serial2 pins (RX2/TX2)
-PZEM004Tv30 pzem(Serial2, 16, 17, 0x07); // RX2=16, TX2=17, Address=0x07
+// PZEM with specific address from config - using Serial2 pins (RX2/TX2)
+PZEM004Tv30 pzem(Serial2, 16, 17, pzem_address); // RX2=16, TX2=17, Address from config
 
 // Web server on port 80
 WebServer server(80);
@@ -99,6 +75,9 @@ void readPowerData();
 void storeRecordedData();
 String getISOTime();
 String getFormattedTime();
+bool resetPZEMEnergy();
+void testModbusRTUCommunication();
+void testPZEMCommunication();
 
 // MQTT Functions
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
@@ -138,6 +117,17 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
       recording.interval = newInterval;
     }
   }
+  else if (String(topic) == String(mqtt_command_topic) + "/reset_energy") {
+    if (message == "true" || message == "1") {
+      Serial.println("Debug: MQTT command - Reset energy counter");
+      bool success = resetPZEMEnergy();
+      if (success) {
+        mqtt_client.publish((String(mqtt_status_topic) + "/energy_reset").c_str(), "SUCCESS");
+      } else {
+        mqtt_client.publish((String(mqtt_status_topic) + "/energy_reset").c_str(), "FAILED");
+      }
+    }
+  }
 }
 
 void mqtt_connect() {
@@ -151,6 +141,7 @@ void mqtt_connect() {
     mqtt_client.subscribe((String(mqtt_command_topic) + "/record/start").c_str());
     mqtt_client.subscribe((String(mqtt_command_topic) + "/record/stop").c_str());
     mqtt_client.subscribe((String(mqtt_command_topic) + "/interval").c_str());
+    mqtt_client.subscribe((String(mqtt_command_topic) + "/reset_energy").c_str());
     
     Serial.println("Debug: MQTT subscriptions created");
     
@@ -259,6 +250,188 @@ void stopRecording() {
   Serial.printf("Debug: Recording stopped. Duration: %lu ms, Records: %d\n", duration, recording.recordCount);
 }
 
+// Modbus-RTU CRC calculation function
+uint16_t modbusCRC16(uint8_t* data, int length) {
+  uint16_t crc = 0xFFFF;
+  
+  for (int i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (int j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc = (crc >> 1) ^ 0xA001;
+      } else {
+        crc = crc >> 1;
+      }
+    }
+  }
+  
+  return crc;
+}
+
+bool resetPZEMEnergy() {
+  Serial.println("Debug: Attempting to reset PZEM energy counter using Modbus-RTU...");
+  
+  // Get the current PZEM address
+  uint8_t addr = pzem.readAddress();
+  Serial.printf("Debug: PZEM Address: 0x%02X\n", addr);
+  
+  if (addr == 0x00) {
+    Serial.println("Debug: ERROR - Could not read PZEM address");
+    Serial.println("Debug: Trying to set address to 0x07...");
+    if (pzem.setAddress(0x07)) {
+      Serial.println("Debug: Address set successfully to 0x07");
+      addr = 0x07;
+    } else {
+      Serial.println("Debug: Failed to set address to 0x07");
+      return false;
+    }
+  }
+  
+  // Method 1: Try using PZEM library's built-in reset function
+  Serial.println("Debug: Method 1: Trying PZEM library reset function...");
+  if (pzem.resetEnergy()) {
+    Serial.println("Debug: SUCCESS - Energy reset using library function!");
+    return true;
+  } else {
+    Serial.println("Debug: FAILED - Library reset function failed");
+  }
+  
+  // Method 2: Try manual Modbus-RTU reset with different approaches
+  for (int method = 2; method <= 4; method++) {
+    Serial.printf("Debug: Method %d: Manual Modbus-RTU reset\n", method);
+    
+    // Try multiple reset attempts for each method
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      Serial.printf("Debug: Method %d, attempt %d/2\n", method, attempt);
+      
+      // Build the Modbus-RTU reset energy command
+      uint8_t command[4];
+      command[0] = addr;  // Slave address (0x01-0xF7)
+      command[1] = 0x42;  // Function code 0x42 (Reset energy)
+      
+      // Calculate CRC for the first 2 bytes
+      uint16_t crc = modbusCRC16(command, 2);
+      command[2] = (crc >> 8) & 0xFF;  // CRC high byte
+      command[3] = crc & 0xFF;          // CRC low byte
+      
+      Serial.printf("Debug: Modbus-RTU Reset command: 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                    command[0], command[1], command[2], command[3]);
+      
+      // Clear any existing data in the serial buffer
+      while (Serial2.available()) {
+        Serial2.read();
+      }
+      
+      // Send the command
+      Serial2.write(command, 4);
+      Serial.println("Debug: Reset command sent");
+      
+      // Wait for response with longer timeout
+      unsigned long startTime = millis();
+      while (Serial2.available() < 4 && (millis() - startTime) < 3000) {
+        delay(10);
+      }
+      
+      if (Serial2.available() >= 4) {
+        uint8_t response[4];
+        for (int i = 0; i < 4; i++) {
+          response[i] = Serial2.read();
+        }
+        
+        Serial.printf("Debug: Reset response: 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                      response[0], response[1], response[2], response[3]);
+        
+        // Verify response CRC
+        uint16_t responseCRC = modbusCRC16(response, 2);
+        uint16_t receivedCRC = (response[3] << 8) | response[2];
+        
+        Serial.printf("Debug: Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", 
+                      responseCRC, receivedCRC);
+        
+        // Check if response matches the command (success case)
+        if (response[0] == command[0] && response[1] == command[1] && responseCRC == receivedCRC) {
+          Serial.println("Debug: SUCCESS - Energy counter reset successfully!");
+          return true;
+        }
+        // Check for Modbus exception response (slave address + 0xC2 + exception code + CRC)
+        else if (response[0] == command[0] && response[1] == 0xC2) {
+          Serial.printf("Debug: ERROR - PZEM returned exception code: 0x%02X\n", response[2]);
+          // Continue to next attempt
+        }
+        else {
+          Serial.println("Debug: ERROR - Unexpected response format or CRC mismatch");
+          // Continue to next attempt
+        }
+      } else {
+        Serial.printf("Debug: ERROR - No response received from PZEM (method %d, attempt %d)\n", method, attempt);
+        Serial.printf("Debug: Bytes available: %d\n", Serial2.available());
+        
+        // Try to read any partial response
+        if (Serial2.available() > 0) {
+          Serial.print("Debug: Partial response: ");
+          while (Serial2.available()) {
+            Serial.printf("0x%02X ", Serial2.read());
+          }
+          Serial.println();
+        }
+      }
+      
+      // Wait before next attempt
+      if (attempt < 2) {
+        Serial.println("Debug: Waiting 1 second before next attempt...");
+        delay(1000);
+      }
+    }
+    
+    // Wait between methods
+    if (method < 4) {
+      Serial.println("Debug: Waiting 2 seconds before next method...");
+      delay(2000);
+    }
+  }
+  
+  // Method 5: Try broadcast reset (address 0x00)
+  Serial.println("Debug: Method 5: Trying broadcast reset (address 0x00)...");
+  uint8_t broadcastCommand[4];
+  broadcastCommand[0] = 0x00;  // Broadcast address
+  broadcastCommand[1] = 0x42;  // Function code 0x42 (Reset energy)
+  
+  uint16_t broadcastCRC = modbusCRC16(broadcastCommand, 2);
+  broadcastCommand[2] = (broadcastCRC >> 8) & 0xFF;
+  broadcastCommand[3] = broadcastCRC & 0xFF;
+  
+  Serial.printf("Debug: Broadcast Reset command: 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                broadcastCommand[0], broadcastCommand[1], broadcastCommand[2], broadcastCommand[3]);
+  
+  // Clear buffer and send broadcast command
+  while (Serial2.available()) {
+    Serial2.read();
+  }
+  
+  Serial2.write(broadcastCommand, 4);
+  Serial.println("Debug: Broadcast reset command sent");
+  
+  // Wait a bit for the command to be processed
+  delay(1000);
+  
+  // Check if energy was reset by reading it
+  float energyBefore = pzem.energy();
+  Serial.printf("Debug: Energy before broadcast reset: %f kWh\n", energyBefore);
+  
+  // Wait a bit more and check again
+  delay(2000);
+  float energyAfter = pzem.energy();
+  Serial.printf("Debug: Energy after broadcast reset: %f kWh\n", energyAfter);
+  
+  if (energyAfter < energyBefore) {
+    Serial.println("Debug: SUCCESS - Energy appears to have been reset via broadcast!");
+    return true;
+  }
+  
+  Serial.println("Debug: ERROR - All reset methods failed");
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -319,7 +492,7 @@ void setup() {
 
   // Test PZEM communication
   Serial.println("Debug: Testing PZEM communication...");
-  testPZEMCommunication();
+  testModbusRTUCommunication();
 
   // Initialize MQTT
   Serial.println("Debug: Initializing MQTT...");
@@ -428,6 +601,77 @@ void testPZEMCommunication() {
   Serial.println("Debug: === PZEM Test Complete ===");
 }
 
+void testModbusRTUCommunication() {
+  Serial.println("Debug: === Modbus-RTU PZEM Communication Test ===");
+  
+  // Test 1: Read PZEM address using Modbus-RTU
+  Serial.println("Debug: Test 1: Reading PZEM address...");
+  uint8_t addr = pzem.readAddress();
+  Serial.printf("Debug: PZEM Address: 0x%02X\n", addr);
+  
+  if (addr == 0x00) {
+    Serial.println("Debug: WARNING - No response from PZEM");
+    Serial.println("Debug: Checking if PZEM is powered and connected...");
+    
+    // Test basic Serial2 communication
+    Serial.println("Debug: Testing Serial2 communication...");
+    Serial2.println("Test");
+    delay(100);
+    if (Serial2.available()) {
+      Serial.println("Debug: Serial2 is working");
+      while (Serial2.available()) {
+        Serial.printf("Debug: Serial2 data: 0x%02X\n", Serial2.read());
+      }
+    } else {
+      Serial.println("Debug: Serial2 not responding");
+    }
+  } else {
+    Serial.printf("Debug: SUCCESS - PZEM found at address 0x%02X\n", addr);
+    
+    // Test 2: Try to set address to 0x07
+    Serial.println("Debug: Test 2: Setting PZEM address to 0x07...");
+    if (pzem.setAddress(0x07)) {
+      Serial.println("Debug: SUCCESS - Address set to 0x07");
+      addr = 0x07;
+    } else {
+      Serial.println("Debug: FAILED - Could not set address to 0x07");
+    }
+    
+    // Test 3: Test basic readings
+    Serial.println("Debug: Test 3: Testing basic readings...");
+    float voltage = pzem.voltage();
+    float current = pzem.current();
+    float power = pzem.power();
+    float energy = pzem.energy();
+    
+    Serial.printf("Debug: Voltage: %s\n", isnan(voltage) ? "NaN" : String(voltage, 2).c_str());
+    Serial.printf("Debug: Current: %s\n", isnan(current) ? "NaN" : String(current, 3).c_str());
+    Serial.printf("Debug: Power: %s\n", isnan(power) ? "NaN" : String(power, 2).c_str());
+    Serial.printf("Debug: Energy: %s\n", isnan(energy) ? "NaN" : String(energy, 3).c_str());
+    
+    // Test 4: Test library reset function
+    Serial.println("Debug: Test 4: Testing library reset function...");
+    bool libraryResetSuccess = pzem.resetEnergy();
+    Serial.printf("Debug: Library reset: %s\n", libraryResetSuccess ? "SUCCESS" : "FAILED");
+    
+    // Test 5: Test energy reset command
+    Serial.println("Debug: Test 5: Testing energy reset command...");
+    bool resetSuccess = resetPZEMEnergy();
+    Serial.printf("Debug: Energy reset: %s\n", resetSuccess ? "SUCCESS" : "FAILED");
+  }
+  
+  // Test 6: Check Serial2 configuration
+  Serial.println("Debug: Test 6: Serial2 configuration check...");
+  Serial.printf("Debug: Baud rate: 9600\n");
+  Serial.printf("Debug: Data bits: 8\n");
+  Serial.printf("Debug: Stop bits: 1\n");
+  Serial.printf("Debug: Parity: None\n");
+  Serial.printf("Debug: RX pin: GPIO 16\n");
+  Serial.printf("Debug: TX pin: GPIO 17\n");
+  
+  Serial.println("Debug: === Modbus-RTU Test Complete ===");
+}
+
 void setupWebServer() {
   Serial.println("Debug: Configuring web server endpoints...");
   
@@ -495,6 +739,7 @@ void setupWebServer() {
     html += "<div class='metric'><span class='metric-label'>Last Update:</span><span class='metric-value' id='last-update'>--</span></div>";
     html += "<div class='button-group'>";
     html += "<button class='btn btn-warning' onclick='testPZEM()'>🔧 Test PZEM</button>";
+    html += "<button class='btn btn-danger' onclick='resetEnergy()'>🔄 Reset Energy</button>";
     html += "</div></div></div>";
     html += "<div class='card'><h3>Data Recording</h3>";
     html += "<div id='recording-status' class='recording-inactive'>Recording: Inactive</div>";
@@ -524,6 +769,7 @@ void setupWebServer() {
     html += "async function getAnalysis(){try{const response=await fetch('/analysis');const data=await response.json();if(data.error)throw new Error(data.error);const analysis=data.analysis;const message='Analysis: Min '+analysis.min_power+'W, Max '+analysis.max_power+'W, Avg '+analysis.avg_power+'W, Energy '+analysis.total_energy+'kWh, Duration '+(analysis.duration_seconds/60).toFixed(1)+'min';showMessage(message);}catch(error){console.error('Error getting analysis:',error);showMessage('Error getting analysis: '+error.message,'error');}}";
     html += "async function clearData(){if(!confirm('Are you sure you want to clear all recorded data?'))return;try{const response=await fetch('/record/clear',{method:'POST'});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('All recorded data cleared');updateRecordingStatus();}catch(error){console.error('Error clearing data:',error);showMessage('Error clearing data: '+error.message,'error');}}";
     html += "async function testPZEM(){try{const response=await fetch('/pzem_test');const data=await response.json();if(data.error)throw new Error(data.error);const results=data.test_results;const message='PZEM Test: Address 0x'+results.address+', Voltage '+results.voltage+'V, Current '+results.current+'A, Power '+results.power+'W';showMessage(message);}catch(error){console.error('Error testing PZEM:',error);showMessage('Error testing PZEM: '+error.message,'error');}}";
+    html += "async function resetEnergy(){if(!confirm('Are you sure you want to reset the PZEM energy counter? This will set the energy reading back to 0 kWh.'))return;try{const response=await fetch('/pzem/reset_energy',{method:'POST'});const data=await response.json();if(data.error)throw new Error(data.error);showMessage('Energy counter reset successfully!');}catch(error){console.error('Error resetting energy:',error);showMessage('Error resetting energy: '+error.message,'error');}}";
     html += "function convertToCSV(records){const headers=['Timestamp','ISO Time','Voltage (V)','Current (A)','Power (W)','Energy (kWh)','Frequency (Hz)','Power Factor','Address'];const csvRows=[headers.join(',')];records.forEach(record=>{const row=[record.timestamp,record.iso_time,record.voltage,record.current,record.power,record.energy,record.frequency,record.power_factor,record.address];csvRows.push(row.join(','));});return csvRows.join('\\n');}";
     html += "function downloadCSV(csv,filename){const blob=new Blob([csv],{type:'text/csv'});const url=window.URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();window.URL.revokeObjectURL(url);}";
     html += "function startAutoRefresh(){refreshInterval=setInterval(()=>{loadStatus();loadData();updateRecordingStatus();},5000);}";
@@ -875,6 +1121,201 @@ void setupWebServer() {
     
     Serial.println("Debug: All recorded data cleared");
     server.send(200, "application/json", "{\"status\":\"data_cleared\"}");
+  });
+
+  // Reset PZEM energy counter
+  server.on("/pzem/reset_energy", HTTP_POST, []() {
+    Serial.println("Debug: /pzem/reset_energy endpoint accessed");
+    
+    bool success = resetPZEMEnergy();
+    
+    if (success) {
+      Serial.println("Debug: Energy reset successful - sending success response");
+      server.send(200, "application/json", "{\"status\":\"energy_reset_successful\",\"message\":\"PZEM energy counter has been reset\"}");
+    } else {
+      Serial.println("Debug: Energy reset failed - sending error response");
+      server.send(500, "application/json", "{\"error\":\"Failed to reset PZEM energy counter\"}");
+    }
+  });
+
+  // Simple library reset test
+  server.on("/pzem/reset_library", HTTP_POST, []() {
+    Serial.println("Debug: /pzem/reset_library endpoint accessed");
+    
+    // Try the library's built-in reset function
+    Serial.println("Debug: Trying PZEM library resetEnergy() function...");
+    bool success = pzem.resetEnergy();
+    
+    if (success) {
+      Serial.println("Debug: Library reset successful");
+      server.send(200, "application/json", "{\"status\":\"library_reset_successful\",\"message\":\"PZEM energy counter reset using library function\"}");
+    } else {
+      Serial.println("Debug: Library reset failed");
+      server.send(500, "application/json", "{\"error\":\"Library reset function failed\"}");
+    }
+  });
+
+  // PZEM Diagnostic endpoint
+  server.on("/pzem/diagnostic", HTTP_GET, []() {
+    Serial.println("Debug: /pzem/diagnostic endpoint accessed");
+    
+    String diagnostic = "{\"diagnostic\":{";
+    
+    // Test 1: Check Serial2 status
+    diagnostic += "\"serial2_status\":\"";
+    if (Serial2) {
+      diagnostic += "OK";
+    } else {
+      diagnostic += "FAILED";
+    }
+    diagnostic += "\",";
+    
+    // Test 2: Check PZEM address
+    uint8_t addr = pzem.readAddress();
+    diagnostic += "\"pzem_address\":\"0x";
+    if (addr == 0x00) {
+      diagnostic += "00 (NO RESPONSE)";
+    } else {
+      diagnostic += String(addr, HEX);
+    }
+    diagnostic += "\",";
+    
+    // Test 3: Try to set address
+    diagnostic += "\"address_set_test\":\"";
+    if (pzem.setAddress(0x07)) {
+      diagnostic += "SUCCESS";
+    } else {
+      diagnostic += "FAILED";
+    }
+    diagnostic += "\",";
+    
+    // Test 4: Test basic readings
+    diagnostic += "\"voltage_reading\":\"";
+    float voltage = pzem.voltage();
+    if (isnan(voltage)) {
+      diagnostic += "NaN";
+    } else {
+      diagnostic += String(voltage, 2) + "V";
+    }
+    diagnostic += "\",";
+    
+    diagnostic += "\"current_reading\":\"";
+    float current = pzem.current();
+    if (isnan(current)) {
+      diagnostic += "NaN";
+    } else {
+      diagnostic += String(current, 3) + "A";
+    }
+    diagnostic += "\",";
+    
+    diagnostic += "\"power_reading\":\"";
+    float power = pzem.power();
+    if (isnan(power)) {
+      diagnostic += "NaN";
+    } else {
+      diagnostic += String(power, 2) + "W";
+    }
+    diagnostic += "\",";
+    
+    // Test 5: Test energy reset command
+    diagnostic += "\"energy_reset_test\":\"";
+    bool resetSuccess = resetPZEMEnergy();
+    if (resetSuccess) {
+      diagnostic += "SUCCESS";
+    } else {
+      diagnostic += "FAILED";
+    }
+    diagnostic += "\",";
+    
+    // Test 6: Serial2 buffer status
+    diagnostic += "\"serial2_buffer\":\"";
+    int available = Serial2.available();
+    diagnostic += String(available) + " bytes available";
+    diagnostic += "\",";
+    
+    // Test 7: Memory status
+    diagnostic += "\"free_heap\":\"" + String(ESP.getFreeHeap()) + " bytes\"";
+    
+    diagnostic += "}}";
+    
+    Serial.println("Debug: Sending diagnostic response");
+    server.send(200, "application/json", diagnostic);
+  });
+
+  // Modbus-RTU specific diagnostic endpoint
+  server.on("/pzem/modbus_test", HTTP_GET, []() {
+    Serial.println("Debug: /pzem/modbus_test endpoint accessed");
+    
+    String modbusTest = "{\"modbus_test\":{";
+    
+    // Test Modbus-RTU protocol specifically
+    modbusTest += "\"protocol\":\"Modbus-RTU\",";
+    modbusTest += "\"baud_rate\":\"9600\",";
+    modbusTest += "\"data_bits\":\"8\",";
+    modbusTest += "\"stop_bits\":\"1\",";
+    modbusTest += "\"parity\":\"None\",";
+    
+    // Test address reading
+    uint8_t addr = pzem.readAddress();
+    modbusTest += "\"address_read\":\"0x";
+    if (addr == 0x00) {
+      modbusTest += "00 (NO RESPONSE)";
+    } else {
+      modbusTest += String(addr, HEX);
+    }
+    modbusTest += "\",";
+    
+    // Test address setting
+    modbusTest += "\"address_set\":\"";
+    if (pzem.setAddress(0x07)) {
+      modbusTest += "SUCCESS";
+    } else {
+      modbusTest += "FAILED";
+    }
+    modbusTest += "\",";
+    
+    // Test energy reset with detailed logging
+    modbusTest += "\"energy_reset_detailed\":\"";
+    bool resetSuccess = resetPZEMEnergy();
+    if (resetSuccess) {
+      modbusTest += "SUCCESS";
+    } else {
+      modbusTest += "FAILED";
+    }
+    modbusTest += "\",";
+    
+    // Test basic Modbus-RTU readings
+    modbusTest += "\"voltage_modbus\":\"";
+    float voltage = pzem.voltage();
+    if (isnan(voltage)) {
+      modbusTest += "NaN";
+    } else {
+      modbusTest += String(voltage, 2) + "V";
+    }
+    modbusTest += "\",";
+    
+    modbusTest += "\"current_modbus\":\"";
+    float current = pzem.current();
+    if (isnan(current)) {
+      modbusTest += "NaN";
+    } else {
+      modbusTest += String(current, 3) + "A";
+    }
+    modbusTest += "\",";
+    
+    modbusTest += "\"power_modbus\":\"";
+    float power = pzem.power();
+    if (isnan(power)) {
+      modbusTest += "NaN";
+    } else {
+      modbusTest += String(power, 2) + "W";
+    }
+    modbusTest += "\"";
+    
+    modbusTest += "}}";
+    
+    Serial.println("Debug: Sending Modbus-RTU test response");
+    server.send(200, "application/json", modbusTest);
   });
 
   // Handle not found

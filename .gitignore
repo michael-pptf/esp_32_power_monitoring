@@ -1,3 +1,4 @@
 mqtt_config.h
 mqtt_test.py
 home_assistant_mqtt_config.yaml
+esp32/power_monitor/config.h

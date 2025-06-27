@@ -159,20 +159,33 @@ automation:
 
 ## 🚀 Quick Start
 
-### 1. Upload the Code
-1. Open `power_monitoring.ino` in Arduino IDE
+### 1. Configuration Setup
+1. Copy the configuration template:
+   ```bash
+   cp esp32/power_monitor/config.h.template esp32/power_monitor/config.h
+   ```
+2. Edit `esp32/power_monitor/config.h` with your credentials:
+   ```cpp
+   // Wi-Fi credentials
+   const char* ssid = "YOUR_WIFI_SSID";
+   const char* password = "YOUR_WIFI_PASSWORD";
+   
+   // MQTT Configuration
+   const char* mqtt_server = "192.168.1.100";  // Your Home Assistant IP
+   const char* mqtt_username = "your_mqtt_username";  // Leave empty if no authentication
+   const char* mqtt_password = "your_mqtt_password";  // Leave empty if no authentication
+   ```
+
+### 2. Upload the Code
+1. Open `esp32/power_monitor/power_monitor.ino` in Arduino IDE
 2. Install required libraries:
    - `PZEM004Tv30` by `olehs`
    - `WiFi` (built-in)
    - `WebServer` (built-in)
-3. Update WiFi credentials:
-   ```cpp
-   const char* ssid = "YOUR_WIFI_SSID";
-   const char* password = "YOUR_WIFI_PASSWORD";
-   ```
-4. Upload to ESP32
+   - `PubSubClient` by `Nick O'Leary`
+3. Upload to ESP32
 
-### 2. Test Basic Functionality
+### 3. Test Basic Functionality
 ```bash
 # Get current power reading
 curl http://192.168.1.236/data
@@ -181,7 +194,7 @@ curl http://192.168.1.236/data
 curl http://192.168.1.236/status
 ```
 
-### 3. Test Recording Mode
+### 4. Test Recording Mode
 ```bash
 # Start recording every 2 seconds
 curl -X POST http://192.168.1.236/record/start \
@@ -259,13 +272,23 @@ curl http://192.168.1.236/analysis
 - **Check power**: PZEM needs 5V, but can be powered by 3.3V from the board
 - **Check wiring**: TX→RX2 (GPIO 16), RX→TX2 (GPIO 17)
 - **Check AC power**: PZEM must be connected to live AC
+- **Check baud rate**: PZEM-004T v3.0 typically uses 9600 baud
+- **Check address**: Default address is 0x01, but can be changed to 0x07
 
-#### 2. WiFi Connection Issues
-- Verify SSID and password
+#### 2. Energy Reset Not Working
+If you get "No response received from PZEM" when trying to reset energy:
+- **Check PZEM power**: Ensure PZEM is properly powered and connected to AC
+- **Check wiring**: Verify TX/RX connections are correct
+- **Try diagnostic endpoint**: Use `/pzem/diagnostic` to test communication
+- **Check address**: Ensure PZEM address matches configuration (default 0x07)
+- **Try multiple attempts**: The reset function now retries 3 times automatically
+
+#### 3. WiFi Connection Issues
+- Verify SSID and password in `config.h`
 - Check WiFi signal strength
 - Ensure network allows HTTP traffic
 
-#### 3. Memory Issues
+#### 4. Memory Issues
 - Monitor heap usage in serial output
 - Reduce recording buffer size if needed
 - Restart ESP32 if memory gets low
@@ -275,22 +298,122 @@ curl http://192.168.1.236/analysis
 # Check PZEM communication
 curl http://ESP_IP/pzem_test
 
+# Comprehensive PZEM diagnostic
+curl http://ESP_IP/pzem/diagnostic
+
+# Modbus-RTU specific diagnostic
+curl http://ESP_IP/pzem/modbus_test
+
+# Test library reset function
+curl -X POST http://ESP_IP/pzem/reset_library
+
+# Test comprehensive reset (multiple methods)
+curl -X POST http://ESP_IP/pzem/reset_energy
+
 # Check system status
 curl http://ESP_IP/status
 ```
 
+### PZEM Diagnostic Response:
+The `/pzem/diagnostic` endpoint provides detailed information:
+```json
+{
+  "diagnostic": {
+    "serial2_status": "OK",
+    "pzem_address": "0x07",
+    "address_set_test": "SUCCESS",
+    "voltage_reading": "120.5V",
+    "current_reading": "2.34A",
+    "power_reading": "282.0W",
+    "energy_reset_test": "SUCCESS",
+    "serial2_buffer": "0 bytes available",
+    "free_heap": "250000 bytes"
+  }
+}
+```
+
+### Modbus-RTU Test Response:
+The `/pzem/modbus_test` endpoint provides Modbus-RTU specific information:
+```json
+{
+  "modbus_test": {
+    "protocol": "Modbus-RTU",
+    "baud_rate": "9600",
+    "data_bits": "8",
+    "stop_bits": "1",
+    "parity": "None",
+    "address_read": "0x07",
+    "address_set": "SUCCESS",
+    "energy_reset_detailed": "SUCCESS",
+    "voltage_modbus": "120.5V",
+    "current_modbus": "2.34A",
+    "power_modbus": "282.0W"
+  }
+}
+```
+
+### PZEM Modbus-RTU Protocol:
+The PZEM-004T v3.0 uses Modbus-RTU protocol:
+- **Baud Rate**: 9600
+- **Data Bits**: 8
+- **Stop Bits**: 1
+- **Parity**: None
+- **Function Code 0x42**: Reset energy counter
+- **Address Range**: 0x01-0xF7 (0x00 = broadcast, 0xF8 = general address)
+- **CRC**: Modbus-RTU CRC16 (polynomial 0xA001)
+
+### Common PZEM Issues and Solutions:
+
+| Issue | Symptoms | Solution |
+|-------|----------|----------|
+| **No Response** | Address reads 0x00 | Check power, wiring, AC connection |
+| **Wrong Address** | Address not 0x07 | Use `/pzem/diagnostic` to set address |
+| **Reset Fails** | "No response" error | Check AC power, try multiple times |
+| **NaN Readings** | Invalid readings | Check AC connection, restart PZEM |
+| **Intermittent** | Works sometimes | Check wiring, power supply stability |
+
 ## ⚙️ Configuration
+
+### Configuration File:
+All credentials and settings are stored in `esp32/power_monitor/config.h`:
+
+```cpp
+// Wi-Fi credentials
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// MQTT Configuration
+const char* mqtt_server = "192.168.1.100";  // Your Home Assistant IP
+const int mqtt_port = 1883;
+const char* mqtt_username = "your_mqtt_username";
+const char* mqtt_password = "your_mqtt_password";
+const char* mqtt_client_id = "esp32_power_monitor";
+const char* mqtt_device_name = "ESP32 Power Monitor";
+const char* mqtt_device_id = "esp32_power_monitor_001";
+
+// MQTT Topics
+const char* mqtt_base_topic = "esp32/power";
+const char* mqtt_status_topic = "esp32/status";
+const char* mqtt_command_topic = "esp32/command";
+const char* mqtt_discovery_prefix = "homeassistant";
+
+// Time configuration
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = -28800; // GMT-8 for Los Angeles (PST)
+const int daylightOffset_sec = 3600; // 1 hour for PDT
+const char* timezone = "America/Los_Angeles";
+
+// PZEM Configuration
+const uint8_t pzem_address = 0x07; // PZEM address
+```
+
+**Security Note**: The `config.h` file is excluded from version control to prevent credentials from being committed. Always use the template file to create your configuration.
 
 ### Recording Settings:
 - **Default interval**: 5 seconds
 - **Configurable range**: 1-60 seconds
 - **Buffer size**: 100 records (circular)
 - **Memory usage**: ~4KB for data storage
-
-### WiFi Settings:
-- **SSID**: Update in code
-- **Password**: Update in code
-- **IP Address**: DHCP assigned (check serial output)
 
 ## 📈 Performance
 

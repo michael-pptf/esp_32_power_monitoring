@@ -1,0 +1,32 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// Wi-Fi credentials
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+
+// MQTT Configuration
+const char* mqtt_server = "YOUR_MQTT_SERVER";  // Change to your Home Assistant IP
+const int mqtt_port = 1883;
+const char* mqtt_username = "YOUR_MQTT_USERNAME";  // Leave empty if no authentication
+const char* mqtt_password = "YOUR_MQTT_PASSWORD";  // Leave empty if no authentication
+const char* mqtt_client_id = "esp32_power_monitor";
+const char* mqtt_device_name = "ESP32 Power Monitor";
+const char* mqtt_device_id = "esp32_power_monitor_001";
+
+// MQTT Topics
+const char* mqtt_base_topic = "esp32/power";
+const char* mqtt_status_topic = "esp32/status";
+const char* mqtt_command_topic = "esp32/command";
+const char* mqtt_discovery_prefix = "homeassistant";
+
+// Time configuration
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = -28800; // GMT-8 for Los Angeles (PST)
+const int daylightOffset_sec = 3600; // 1 hour for PDT
+const char* timezone = "America/Los_Angeles";
+
+// PZEM Configuration
+const uint8_t pzem_address = 0x07; // PZEM address
+
+#endif // CONFIG_H 
